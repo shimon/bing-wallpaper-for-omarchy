@@ -7,6 +7,7 @@ Item {
 
   property var shell: null
   property var manifest: null
+  property var pluginRegistry: null
 
   readonly property string pluginId: "io.github.odessa2.bing-wallpaper"
   readonly property string home: Quickshell.env("HOME")
@@ -38,9 +39,37 @@ Item {
   property bool themeTransitionActive: false
   readonly property bool busy: updateProcess.running
 
-  readonly property string sourceDir: manifest && manifest.__sourceDir
-    ? String(manifest.__sourceDir)
+  // The host strips __sourceDir from third-party manifests, so the plugin
+  // directory is resolved from the registry's entry point URL. The manifest is
+  // only a fallback for first-party hosts that still expose the field.
+  function decodeFileUrl(url) {
+    var text = String(url || "")
+    if (text.indexOf("file://") !== 0) return ""
+    var segments = text.slice(7).split("/")
+    var decoded = []
+    for (var i = 0; i < segments.length; i++) {
+      try {
+        decoded.push(decodeURIComponent(segments[i]))
+      } catch (error) {
+        return ""
+      }
+    }
+    return decoded.join("/")
+  }
+
+  function parentDirectory(path) {
+    var text = String(path || "")
+    var index = text.lastIndexOf("/")
+    return index > 0 ? text.slice(0, index) : ""
+  }
+
+  readonly property string serviceEntryPath: pluginRegistry && manifest
+      && typeof pluginRegistry.entryPointUrl === "function"
+    ? decodeFileUrl(pluginRegistry.entryPointUrl(manifest, "service"))
     : ""
+  readonly property string sourceDir: serviceEntryPath !== ""
+    ? parentDirectory(serviceEntryPath)
+    : (manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : "")
   readonly property string helperPath: sourceDir !== ""
     ? sourceDir + "/scripts/update-wallpaper"
     : ""
@@ -52,11 +81,18 @@ Item {
       || /^[a-z]{2}-[A-Z]{2}$/.test(candidate)
   }
 
+  // Third-party plugins receive only the bar section of the shell
+  // configuration, so fall back to it when the full config is unavailable.
+  function barLayout() {
+    var config = shell && shell.shellConfig ? shell.shellConfig : null
+    if (config && config.bar && config.bar.layout) return config.bar.layout
+    var barConfig = shell && shell.barConfig ? shell.barConfig : null
+    return barConfig && barConfig.layout ? barConfig.layout : null
+  }
+
   function inlineEntry() {
     var config = shell && shell.shellConfig ? shell.shellConfig : null
-    var layout = config && config.bar && config.bar.layout
-      ? config.bar.layout
-      : null
+    var layout = barLayout()
     if (layout) {
       var sections = ["left", "center", "right"]
       for (var s = 0; s < sections.length; s++) {
@@ -391,11 +427,12 @@ Item {
 
   Connections {
     target: root.shell
-    function onShellConfigChanged() { root.syncConfigurationFromShell() }
+    function onBarConfigChanged() { root.syncConfigurationFromShell() }
   }
 
   onShellChanged: syncConfigurationFromShell()
   onHelperPathChanged: syncConfigurationFromShell()
+  onPluginRegistryChanged: syncConfigurationFromShell()
 
   IpcHandler {
     target: "bing-wallpaper"
